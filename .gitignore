@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Environments
+venv/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data & Weights (large files - use Git LFS)
+Dataset/
+weights/
+outputs/
+
+# Scratch/experimental
+.scratch/
+*.png
+
+# OS
+.DS_Store
+Thumbs.db
