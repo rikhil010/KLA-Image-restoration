@@ -1,3 +1,11 @@
+# Core dependencies (required for training and inference)
 torch>=2.0.0
 numpy>=1.24.0
 Pillow>=9.0.0
+
+# Perceptual loss + LPIPS evaluation (required for v2 models with --loss_vgg_w > 0)
+torchvision>=0.18.0
+lpips>=0.1.4
+
+# Optional: for data handling and progress
+tqdm>=4.65.0
