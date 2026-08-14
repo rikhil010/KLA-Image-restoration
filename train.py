@@ -27,7 +27,7 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     # Model
     parser.add_argument('--model_name', type=str, default='edsr',
-                        choices=['edsr', 'unet', 'denoise_unet', 'two_stage'])
+                        choices=['edsr', 'rcan', 'unet', 'denoise_unet', 'two_stage', 'fusion_two_stage'])
     parser.add_argument('--n_feats', type=int, default=32)
     parser.add_argument('--n_blocks', type=int, default=12)
     parser.add_argument('--unet_blocks', type=int, default=4)

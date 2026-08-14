@@ -246,12 +246,150 @@ class TwoStageModel(nn.Module):
         print(f"  Loaded {name} weights from {path}")
 
 
+# ── RCAN (Residual Channel Attention Network) ────────────────────────────────
+
+class RCAB(nn.Module):
+    """Residual Channel Attention Block (RCAN)."""
+
+    def __init__(self, n_feats, reduction=16, res_scale=0.1):
+        super().__init__()
+        self.body = nn.Sequential(
+            nn.Conv2d(n_feats, n_feats, 3, padding=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(n_feats, n_feats, 3, padding=1, bias=True),
+        )
+        self.ca = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(n_feats, n_feats // reduction, 1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(n_feats // reduction, n_feats, 1, bias=True),
+            nn.Sigmoid()
+        )
+        self.res_scale = res_scale
+
+    def forward(self, x):
+        res = self.body(x)
+        res = res * self.ca(res)
+        return x + res * self.res_scale
+
+
+class RCAN(nn.Module):
+    """RCAN: EDSR structure with RCAB blocks (channel attention)."""
+
+    def __init__(self, in_channels=1, out_channels=1, n_feats=48, n_blocks=16, res_scale=0.1):
+        super().__init__()
+        self.head = nn.Conv2d(in_channels, n_feats, 3, padding=1)
+        blocks = [RCAB(n_feats, reduction=16, res_scale=res_scale) for _ in range(n_blocks)]
+        self.body = nn.Sequential(*blocks)
+        self.body_conv = nn.Conv2d(n_feats, n_feats, 3, padding=1)
+        self.upsample = UpsamplePS(n_feats, scale=2)
+        self.tail = nn.Conv2d(n_feats, out_channels, 3, padding=1)
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        head = self.head(x)
+        body = self.body(head)
+        body = self.body_conv(body) + head
+        out = self.upsample(body)
+        out = self.tail(out)
+        return out
+
+
+# ── Fusion Two-Stage (feature-level fusion) ──────────────────────────────────
+
+class FusionTwoStage(nn.Module):
+    """
+    Two-stage with feature-level fusion: SR sees denoised features + noisy features.
+    Fixes the distribution mismatch by giving SR both clean and noisy feature streams.
+    """
+
+    def __init__(self, in_channels=1, out_channels=1,
+                 n_feats=48, n_blocks=16, unet_blocks=4, res_scale=0.1):
+        super().__init__()
+        # Denoiser (U-Net encoder up to bottleneck features at 32x32)
+        self.denoiser_enc1 = nn.Sequential(
+            nn.Conv2d(in_channels, n_feats, 3, padding=1), nn.ReLU(inplace=True),
+            *[UNetResBlock(n_feats, res_scale) for _ in range(unet_blocks)]
+        )
+        self.denoiser_pool1 = nn.MaxPool2d(2)
+        self.denoiser_enc2 = nn.Sequential(
+            nn.Conv2d(n_feats, n_feats * 2, 3, padding=1), nn.ReLU(inplace=True),
+            *[UNetResBlock(n_feats * 2, res_scale) for _ in range(unet_blocks)]
+        )
+        self.denoiser_pool2 = nn.MaxPool2d(2)
+        self.denoiser_enc3 = nn.Sequential(
+            nn.Conv2d(n_feats * 2, n_feats * 4, 3, padding=1), nn.ReLU(inplace=True),
+            *[UNetResBlock(n_feats * 4, res_scale) for _ in range(unet_blocks)]
+        )
+        self.denoiser_bottleneck = nn.Sequential(
+            *[UNetResBlock(n_feats * 4, res_scale) for _ in range(unet_blocks)]
+        )
+
+        # SR head (processes raw noisy input)
+        self.sr_head = nn.Conv2d(in_channels, n_feats, 3, padding=1)
+        self.sr_body = nn.Sequential(*[ResidualBlock(n_feats, res_scale) for _ in range(n_blocks)])
+        self.sr_body_conv = nn.Conv2d(n_feats, n_feats, 3, padding=1)
+
+        # Fusion: combine denoised bottleneck features (4C) with SR features (C)
+        # Project denoised features from 4C -> C, then fuse
+        self.denoised_proj = nn.Conv2d(n_feats * 4, n_feats, 1, bias=True)
+        self.fusion = nn.Conv2d(n_feats * 2, n_feats, 1, bias=True)
+
+        # Upsample + tail
+        self.upsample = UpsamplePS(n_feats, scale=2)
+        self.tail = nn.Conv2d(n_feats, out_channels, 3, padding=1)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        # Denoiser encoder path
+        d1 = self.denoiser_enc1(x)                           # [B, C, 128, 128]
+        d2 = self.denoiser_enc2(self.denoiser_pool1(d1))     # [B, 2C, 64, 64]
+        d3 = self.denoiser_enc3(self.denoiser_pool2(d2))     # [B, 4C, 32, 32]
+        db = self.denoiser_bottleneck(d3)                    # [B, 4C, 32, 32]
+
+        # SR path (processes raw noisy input at full resolution)
+        sr_head = self.sr_head(x)                            # [B, C, 128, 128]
+        sr_body = self.sr_body(sr_head)                      # [B, C, 128, 128]
+        sr_body = self.sr_body_conv(sr_body) + sr_head       # [B, C, 128, 128]
+
+        # Fuse: upsample denoised bottleneck to 128x128, project, concat with SR features
+        db_up = F.interpolate(db, scale_factor=4, mode='bilinear', align_corners=False)  # [B, 4C, 128, 128]
+        db_proj = self.denoised_proj(db_up)                  # [B, C, 128, 128]
+        fused = self.fusion(torch.cat([sr_body, db_proj], dim=1))  # [B, C, 128, 128]
+
+        # Upsample and output
+        out = self.upsample(fused)                           # [B, C, 256, 256]
+        out = self.tail(out)                                 # [B, 1, 256, 256]
+        return out
+
+
 # ── Factory ─────────────────────────────────────────────────────────────────
 
 def build_model(cfg):
     """Build model based on config. Returns model on specified device."""
     if cfg.model_name == "edsr":
         model = EDSR(
+            in_channels=1, out_channels=1,
+            n_feats=cfg.n_feats, n_blocks=cfg.n_blocks,
+            res_scale=cfg.res_scale,
+        )
+    elif cfg.model_name == "rcan":
+        model = RCAN(
             in_channels=1, out_channels=1,
             n_feats=cfg.n_feats, n_blocks=cfg.n_blocks,
             res_scale=cfg.res_scale,
@@ -273,6 +411,12 @@ def build_model(cfg):
             in_channels=1, out_channels=1,
             n_feats=cfg.n_feats, n_blocks=cfg.n_blocks,
             res_scale=cfg.res_scale, unet_blocks=cfg.unet_blocks,
+        )
+    elif cfg.model_name == "fusion_two_stage":
+        model = FusionTwoStage(
+            in_channels=1, out_channels=1,
+            n_feats=cfg.n_feats, n_blocks=cfg.n_blocks,
+            unet_blocks=cfg.unet_blocks, res_scale=cfg.res_scale,
         )
     else:
         raise ValueError(f"Unknown model: {cfg.model_name}")
