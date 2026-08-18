@@ -30,3 +30,4 @@ outputs/
 .DS_Store
 Thumbs.db
 Dataset/
+epitax/test_output/
