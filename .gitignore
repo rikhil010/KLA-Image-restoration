@@ -17,7 +17,7 @@ env/
 *.swp
 *.swo
 
-# Data & Weights (large files - use Git LFS)
+# Data & Weights (large files)
 Dataset/
 weights/
 outputs/
@@ -29,6 +29,7 @@ outputs/
 # OS
 .DS_Store
 Thumbs.db
-Dataset/
+
+# Experimental outputs
 epitax/test_output/
 .claude/
