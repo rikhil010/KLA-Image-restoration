@@ -141,6 +141,35 @@ class GradientLoss(nn.Module):
         return F.l1_loss(g_pred, g_target)
 
 
+# ── LPIPS loss (direct perceptual similarity) ─────────────────────────────────
+
+class LPIPSLoss(nn.Module):
+    """
+    Learned Perceptual Image Patch Similarity — differentiable loss that directly
+    targets the LPIPS metric. Uses the official 'alex' or 'vgg' network.
+
+    This is more targeted than VGG perceptual loss because it's trained to match
+    human perceptual judgments, which is exactly what the KLA evaluation measures.
+    """
+
+    def __init__(self, net='alex'):
+        super().__init__()
+        try:
+            import lpips
+            self.lpips = lpips.LPIPS(net=net)
+        except ImportError:
+            raise ImportError("LPIPSLoss requires the 'lpips' package. Install with: pip install lpips")
+        for p in self.parameters():
+            p.requires_grad_(False)
+        self.eval()
+
+    def forward(self, pred, target):
+        # pred/target: [B,1,H,W] float32 in [0,1] -> replicate to 3ch, scale to [-1,1]
+        pred = pred.repeat(1, 3, 1, 1) * 2.0 - 1.0
+        target = target.repeat(1, 3, 1, 1) * 2.0 - 1.0
+        return self.lpips(pred, target).mean()
+
+
 # ── Perceptual (VGG) loss ───────────────────────────────────────────────────
 
 class PerceptualLoss(nn.Module):
@@ -200,11 +229,15 @@ class CombinedLoss(nn.Module):
         self.vgg = None
         if getattr(cfg, 'loss_vgg_w', 0.0) > 0 and _HAS_TORCHVISION:
             self.vgg = PerceptualLoss()
+        self.lpips_loss = None
+        if getattr(cfg, 'loss_lpips_w', 0.0) > 0:
+            self.lpips_loss = LPIPSLoss(net='alex')
         self.w_l1 = cfg.loss_l1_w
         self.w_ssim = cfg.loss_ssim_w
         self.w_fft = cfg.loss_fft_w
         self.w_grad = cfg.loss_grad_w
         self.w_vgg = getattr(cfg, 'loss_vgg_w', 0.0)
+        self.w_lpips = getattr(cfg, 'loss_lpips_w', 0.0)
 
     def forward(self, pred, target):
         # Compute all losses in float32 for numerical stability and AMP
@@ -227,5 +260,11 @@ class CombinedLoss(nn.Module):
             vgg = self.vgg(pred, target)
             total = total + self.w_vgg * vgg
             loss_dict['vgg'] = vgg.item()
+            loss_dict['total'] = total.item()
+        if self.lpips_loss is not None:
+            # LPIPS loss requires grad on input for backprop, so compute in fp32
+            lpips_val = self.lpips_loss(pred, target)
+            total = total + self.w_lpips * lpips_val
+            loss_dict['lpips'] = lpips_val.item()
             loss_dict['total'] = total.item()
         return total, loss_dict

@@ -16,7 +16,7 @@ from PIL import Image
 from .config import get_config
 from .model import build_model, count_parameters
 from .metrics import compute_all_metrics
-from .inference import predict_ensemble
+from .inference import predict_ensemble, predict_with_tta
 
 
 def load_image(path):
@@ -71,14 +71,16 @@ def load_model(cfg, weights_path=None, return_cfg=False):
 
 
 @torch.no_grad()
-def run_inference(models, input_dir, output_dir, cfg, gt_dir=None, tta=False):
+def run_inference(models, input_dir, output_dir, cfg, gt_dir=None, tta=False, chain=False):
     """
     Run inference on all images in input_dir, write restored outputs to output_dir.
     If gt_dir is provided, compute PSNR/SSIM per image and print summary.
 
     Args:
-        models: list of loaded eval-mode models (predictions are averaged).
+        models: list of loaded eval-mode models.
         tta: apply D4 self-ensemble (flips/rotations) to each model.
+        chain: if True, chain models sequentially (e.g. denoiser -> SR);
+               if False, ensemble by averaging predictions.
     """
     if not isinstance(models, (list, tuple)):
         models = [models]
@@ -116,8 +118,15 @@ def run_inference(models, input_dir, output_dir, cfg, gt_dir=None, tta=False):
         # Prepare tensor: [1, 1, H, W]
         lr_tensor = torch.from_numpy(lr_img).unsqueeze(0).unsqueeze(0).float().to(cfg.device)
 
-        # Inference (ensemble + optional TTA)
-        pred = predict_ensemble(models, lr_tensor, tta=tta)
+        # Inference: chain models sequentially, or ensemble by averaging
+        if chain and len(models) > 1:
+            x = lr_tensor
+            for m in models:
+                pred = predict_with_tta(m, x) if tta else m(x)
+                x = pred
+            pred = x
+        else:
+            pred = predict_ensemble(models, lr_tensor, tta=tta)
         pred_img = pred.squeeze().cpu().numpy()
 
         # Save output

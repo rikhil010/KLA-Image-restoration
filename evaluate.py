@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Evaluate / inference script.
+Evaluation / inference script (standalone, no edits required).
+
+Chains a denoiser (128x128 -> 128x128) into an SR model (128x128 -> 256x256)
+when two weights are given, or ensembles them if --ensemble is passed.
 
 Usage:
-    python evaluate.py --input_dir <test_images> --output_dir <restored_outputs>
-    python evaluate.py --input_dir <test_images> --output_dir <outputs> --gt_dir <ground_truth>
-    python evaluate.py --input_dir <test_images> --output_dir <outputs> --weights path/to/model.pth
-    # Ensemble two models with D4 test-time augmentation:
+    python evaluate.py --input_dir <test_images> --output_dir <restored_outputs> \
+        --weights weights/denoise_v3_best_ema.pth \
+        --weights weights/sr_v3_best_ema.pth --tta
     python evaluate.py --input_dir <test_images> --output_dir <outputs> \
-        --gt_dir <ground_truth> --tta \
-        --weights weights/opt1_best_ema.pth --weights weights/opt2_best_ema.pth
+        --gt_dir <ground_truth> --tta
 """
 
 import argparse
@@ -29,12 +30,15 @@ def main():
     parser.add_argument('--output_dir', type=str, required=True,
                         help='Directory for restored output images')
     parser.add_argument('--weights', type=str, action='append', default=None,
-                        help='Path to model weights. Repeatable to ensemble several '
-                             'models. Default: weights/best.pth')
+                        help='Path to model weights. Repeatable. Default: weights/best_ema.pth')
     parser.add_argument('--gt_dir', type=str, default=None,
                         help='Optional ground truth directory for computing metrics')
     parser.add_argument('--tta', action='store_true',
                         help='Apply D4 test-time augmentation (self-ensemble)')
+    parser.add_argument('--chain', action='store_true', default=True,
+                        help='Chain models sequentially (denoiser -> SR). '
+                             'Disable with --no-chain to average/ensemble instead.')
+    parser.add_argument('--no-chain', dest='chain', action='store_false')
     parser.add_argument('--device', type=str, default='auto')
     args = parser.parse_args()
 
@@ -49,7 +53,8 @@ def main():
         total, _ = count_parameters(m)
         print(f"  Loaded {m_cfg.model_name} ({total:,} params) from {wp or 'default'}")
 
-    run_inference(models, args.input_dir, args.output_dir, cfg, args.gt_dir, tta=args.tta)
+    run_inference(models, args.input_dir, args.output_dir, cfg,
+                  args.gt_dir, tta=args.tta, chain=args.chain)
 
 
 if __name__ == '__main__':

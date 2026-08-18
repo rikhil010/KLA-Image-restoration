@@ -61,6 +61,7 @@ class Config:
     loss_fft_w: float = 0.1        # FFT magnitude weight
     loss_grad_w: float = 0.1       # gradient (Sobel edge) weight
     loss_vgg_w: float = 0.0        # VGG perceptual weight (0 = disabled)
+    loss_lpips_w: float = 0.0      # Direct LPIPS loss weight (0 = disabled)
     charb_eps: float = 1e-3        # Charbonnier epsilon
 
     # ── Training ─────────────────────────────────────────────────────────

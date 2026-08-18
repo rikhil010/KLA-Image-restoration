@@ -53,6 +53,8 @@ def main():
     parser.add_argument('--loss_grad_w', type=float, default=0.1)
     parser.add_argument('--loss_vgg_w', type=float, default=0.0,
                         help='VGG perceptual loss weight (0 = disabled)')
+    parser.add_argument('--loss_lpips_w', type=float, default=0.0,
+                        help='LPIPS direct perceptual loss weight (0 = disabled)')
     # Training
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--batch_size', type=int, default=16)
@@ -95,6 +97,7 @@ def main():
         loss_fft_w=args.loss_fft_w,
         loss_grad_w=args.loss_grad_w,
         loss_vgg_w=args.loss_vgg_w,
+        loss_lpips_w=args.loss_lpips_w,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
