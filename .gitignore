@@ -31,3 +31,4 @@ outputs/
 Thumbs.db
 Dataset/
 epitax/test_output/
+.claude/
